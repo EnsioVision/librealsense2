@@ -491,19 +491,21 @@ namespace librealsense
                 }
 
                 // Enumerate all imaging devices
-                for (int member_index = 0; ; ++member_index)
+                for (DWORD member_index = 0; member_index < 0x10000; member_index++)
                 {
                     // Get device information element from the device information set
-                    if (SetupDiEnumDeviceInfo(device_info, member_index, &devInfo) == FALSE)
+                    if (SetupDiEnumDeviceInfo(device_info, member_index, &devInfo) == TRUE)
                     {
-                        if( GetLastError() == ERROR_NO_MORE_ITEMS )
-                            break; // stop when none left
-                        continue; // silently ignore other errors
+                        std::string parent_uid;
+                        if (get_usb_device_descriptors(devInfo.DevInst, device_vid, device_pid, device_uid, location, spec, serial, parent_uid))
+                            return true;
                     }
-
-                    std::string parent_uid;
-                    if( get_usb_device_descriptors( devInfo.DevInst, device_vid, device_pid, device_uid, location, spec, serial, parent_uid ) )
-                        return true;
+                    else
+                    {
+                        DWORD last_error = GetLastError();
+                        if ((last_error == ERROR_NO_MORE_ITEMS) || (last_error == ERROR_INVALID_HANDLE))
+                            break; // stop when none left
+                    }
                 }
             }
             LOG_ERROR( "Could not find camera (vid " << std::hex << device_vid << " pid " << std::hex << device_pid << " uid " << device_uid << ") in windows device tree" );
