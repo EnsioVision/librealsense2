@@ -39,7 +39,7 @@ namespace librealsense
             size_t _count;
             int _handler_requests = 0;
             struct libusb_context* _ctx;
-            volatile int _kill_handler_thread = 0;
+            int _kill_handler_thread = 0;
             std::thread _event_handler;
             static std::shared_ptr<usb_context> _sp_usb_context;
         };
