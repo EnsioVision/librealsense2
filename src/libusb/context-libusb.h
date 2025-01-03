@@ -16,10 +16,12 @@ namespace librealsense
     {
         class usb_context
         {
+        private:
+            usb_context();
         public:
-            usb_context();            
+            static std::shared_ptr<usb_context> get_usb_context();
             ~usb_context();
-            
+
             libusb_context* get();
 
             void start_event_handler();
@@ -27,15 +29,19 @@ namespace librealsense
 
             size_t device_count();
             libusb_device* get_device(uint8_t index);
+            size_t scan();
 
         private:
-            std::mutex _mutex;
-            libusb_device **_list;
+            std::recursive_mutex _mutex;
+            static std::recursive_mutex g_mutex;
+            static int g_count;
+            libusb_device** _list;
             size_t _count;
             int _handler_requests = 0;
             struct libusb_context* _ctx;
-            int _kill_handler_thread = 0;
+            volatile int _kill_handler_thread = 0;
             std::thread _event_handler;
+            static std::shared_ptr<usb_context> _sp_usb_context;
         };
     }
 }
