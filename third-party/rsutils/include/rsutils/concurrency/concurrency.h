@@ -279,7 +279,7 @@ public:
     class cancellable_timer
     {
         dispatcher* _owner;
-    
+
     public:
         cancellable_timer(dispatcher* owner)
             : _owner(owner)
@@ -289,7 +289,7 @@ public:
 
         // Replacement for sleep() -- try to sleep for a time, but stop if the
         // dispatcher is stopped
-        // 
+        //
         // Return false if the dispatcher was stopped, true otherwise
         //
         template< class Duration >
@@ -323,7 +323,7 @@ public:
 
     // Main invocation of an action: this will be called from any thread, and basically just queues
     // up the actions for our dispatching thread to handle them.
-    // 
+    //
     // A blocking invocation means that it will wait until there's room in the queue: if not
     // blocking and the queue is full, the action will be queued at the expense of the next action
     // in line (the oldest) for dispatch!
@@ -347,20 +347,35 @@ public:
     {
         bool done = false;
 
+        // EnsioVision - use a unique cv and mutex so we wait for this item only.
+        // Previously, if multiple threads have called invoke_and_wait then calling notify_one()
+        // does not necessarily notify the correct thread, which can lead to deadlock
+        std::condition_variable wait_for_execution_cv;
+        std::mutex wait_for_execution_mutex;
+
         //action
         auto func = std::move(item);
-        invoke([&, func](dispatcher::cancellable_timer c)
+        auto invoke_item = [&, func](dispatcher::cancellable_timer c)
         {
-            std::lock_guard<std::mutex> lk(_blocking_invoke_mutex);
-            func(c);
+            {
+                // Only one thread can execute
+                std::lock_guard<std::mutex> auto_lock(_blocking_invoke_mutex);
+                func(c);
+            }
 
             done = true;
-            _blocking_invoke_cv.notify_one();
-        }, is_blocking);
+            wait_for_execution_cv.notify_one();
+        };
+
+        invoke(invoke_item, is_blocking);
 
         //wait
-        std::unique_lock<std::mutex> lk(_blocking_invoke_mutex);
-        _blocking_invoke_cv.wait(lk, [&](){ return done || exit_condition(); });
+        std::lock_guard<std::mutex> auto_lock(wait_for_execution_mutex);
+        auto done_predicate = [&]()
+        {
+            return done || exit_condition();
+        };
+        wait_for_execution_cv.wait(auto_lock, done_predicate);
     }
 
     // Stops the dispatcher. This is not a pause: it will clear out the queue, losing any pending
