@@ -370,7 +370,7 @@ public:
         invoke(invoke_item, is_blocking);
 
         //wait
-        std::lock_guard<std::mutex> auto_lock(wait_for_execution_mutex);
+        std::unique_lock<std::mutex> auto_lock(wait_for_execution_mutex);
         auto done_predicate = [&]()
         {
             return done || exit_condition();
