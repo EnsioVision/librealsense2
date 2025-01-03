@@ -492,7 +492,14 @@ namespace librealsense
             throw backend_exception("cannot access depth sensor", RS2_EXCEPTION_TYPE_BACKEND);
         }
         for (auto&& info : depth_devs_info) // Filter just mi=0, DEPTH
-            depth_devices.push_back( get_backend()->create_uvc_device( info ) );
+        {
+            auto uvc_device = get_backend()->create_uvc_device(info);
+            if (uvc_device)
+                depth_devices.push_back(uvc_device);
+        }
+
+        if (depth_devices.empty())
+            throw backend_exception("No create_uvc_devices", RS2_EXCEPTION_TYPE_BACKEND);
 
         std::unique_ptr< frame_timestamp_reader > timestamp_reader_backup( new ds_timestamp_reader() );
         frame_timestamp_reader* timestamp_reader_from_metadata;
