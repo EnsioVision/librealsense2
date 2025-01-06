@@ -349,7 +349,12 @@ public:
 
         // EnsioVision - use a unique cv and mutex so we wait for this item only.
         // Previously, if multiple threads have called invoke_and_wait then calling notify_one()
-        // does not necessarily notify the correct thread, which can lead to deadlock
+        // does not necessarily notify the correct thread, which can lead to deadlock. 
+        // If notify_one() notifies the threads in wait order, there was still a problem
+        // because the order of the items in the command queue could be different to the
+        // order of the threads calling wait (There is no critical section inbetween calling
+        // invoke() and taking the wait mutex)
+
         std::condition_variable wait_for_execution_cv;
         std::mutex wait_for_execution_mutex;
 
