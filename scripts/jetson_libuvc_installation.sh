@@ -12,6 +12,8 @@ else
 	build_type=$1
 fi
 
+echo "Building $build_type ..."
+
 if [ $con_dev -ne 0 ];
 then
 	echo -e "\e[32m"
@@ -22,15 +24,15 @@ fi
 lsb_release -a
 echo "Kernel version $(uname -r)"
 
-if [ $(sudo swapon --show | wc -l) -eq 0 ];
-then
-	echo "No swapon - setting up 1Gb swap file"
-	sudo fallocate -l 2G /swapfile
-	sudo chmod 600 /swapfile
-	sudo mkswap /swapfile
-	sudo swapon /swapfile
-	sudo swapon --show
-fi
+# if [ $(sudo swapon --show | wc -l) -eq 0 ];
+# then
+# 	echo "No swapon - setting up 1Gb swap file"
+# 	sudo fallocate -l 2G /swapfile
+# 	sudo chmod 600 /swapfile
+# 	sudo mkswap /swapfile
+# 	sudo swapon /swapfile
+# 	sudo swapon --show
+# fi
 
 echo Install udev-rules
 cd ..
