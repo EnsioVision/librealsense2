@@ -330,7 +330,7 @@ namespace librealsense
             }
 
             // verify the parsed table
-            if (table->header.crc32 != rsutils::number::calc_crc32(raw_data.data() + sizeof(table_header), raw_data.size() - sizeof(table_header)))
+            if (table->header.crc32 != rsutils::number::calc_crc32(raw_data.data() + sizeof(table_header), header->table_size))            
             {
                 throw invalid_value_exception("Calibration data CRC error, parsing aborted!");
             }

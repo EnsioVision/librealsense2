@@ -2624,6 +2624,11 @@ namespace librealsense
         const uint8_t RS_LED_PWR                         = 0xE;
         const uint8_t RS_EMITTER_FREQUENCY               = 0x10; // Match to DS5_EMITTER_FREQUENCY
 
+        // The d4xx kernel driver's legacy HWMC control (RS_CAMERA_CID_HWMC_LEGACY) reuses the
+        // outgoing command's header/magic_word/opcode/4 params (struct hwm_cmd preamble) as
+        // scratch space and writes the firmware's response starting right after it.
+        constexpr size_t RS_HWMONITOR_LEGACY_HEADER_SIZE = 24;
+
 
         bool v4l_mipi_device::get_pu(rs2_option opt, int32_t& value) const
         {
@@ -2667,7 +2672,14 @@ namespace librealsense
 
         bool v4l_mipi_device::set_xu(const extension_unit& xu, uint8_t control, const uint8_t* data, int size)
         {
-            v4l2_ext_control xctrl{xu_to_cid(xu,control), uint32_t(size), 0, 0};
+            uint32_t cid = xu_to_cid(xu,control);
+            v4l2_ext_control xctrl{cid, uint32_t(size), 0, 0};
+
+            // Some MIPI controls (e.g. HWMC) declare a fixed payload size in the kernel
+            // driver (v4l2_query_ext_ctrl.elems*elem_size) that can be larger than the
+            // caller's buffer. VIDIOC_S_EXT_CTRLS returns EFAULT if ctrl.size is smaller
+            // than the control's declared size, so pad up to match it when needed.
+            std::vector<uint8_t> padded_buf;
             switch (size)
             {
                 case 1: xctrl.value   = *(reinterpret_cast<const uint8_t*>(data)); break;
@@ -2675,7 +2687,22 @@ namespace librealsense
                 case 4: xctrl.value   = *reinterpret_cast<const int32_t*>(data); break;
                 case 8: xctrl.value64 = *reinterpret_cast<const int64_t*>(data); break;
                 default:
+                {
+                    v4l2_query_ext_ctrl q{};
+                    q.id = cid;
+                    if (0 <= ioctl(_fd, VIDIOC_QUERY_EXT_CTRL, &q))
+                    {
+                        uint32_t required = q.elems * q.elem_size;
+                        if (required > uint32_t(size))
+                        {
+                            padded_buf.assign(required, 0);
+                            memcpy(padded_buf.data(), data, size);
+                            data = padded_buf.data();
+                            xctrl.size = required;
+                        }
+                    }
                     xctrl.p_u8 = const_cast<uint8_t*>(data); // TODO aggregate initialization with union
+                }
             }
 
             if (control == RS_ENABLE_AUTO_EXPOSURE)
@@ -2697,8 +2724,29 @@ namespace librealsense
 
         bool v4l_mipi_device::get_xu(const extension_unit& xu, uint8_t control, uint8_t* data, int size) const
         {
-            v4l2_ext_control xctrl{xu_to_cid(xu,control), uint32_t(size), 0, 0};
+            uint32_t cid = xu_to_cid(xu,control);
+            v4l2_ext_control xctrl{cid, uint32_t(size), 0, 0};
             xctrl.p_u8 = data;
+
+            // Pad the read buffer to the control's declared size, mirroring set_xu -
+            // VIDIOC_G_EXT_CTRLS returns EFAULT if ctrl.size is smaller than the
+            // control's declared size (elems*elem_size), e.g. the HWMC control.
+            std::vector<uint8_t> padded_buf;
+            if (size > (int)sizeof(__s64))
+            {
+                v4l2_query_ext_ctrl q{};
+                q.id = cid;
+                if (0 <= ioctl(_fd, VIDIOC_QUERY_EXT_CTRL, &q))
+                {
+                    uint32_t required = q.elems * q.elem_size;
+                    if (required > uint32_t(size))
+                    {
+                        padded_buf.assign(required, 0);
+                        xctrl.p_u8 = padded_buf.data();
+                        xctrl.size = required;
+                    }
+                }
+            }
 
             v4l2_ext_controls ext {xctrl.id & 0xffff0000, 1, 0, 0, 0, &xctrl};
 
@@ -2721,6 +2769,30 @@ namespace librealsense
                 // and not a pointer to a buffer of data (e.g. gvd)
                 if (size < sizeof(__s64))
                     memcpy(data,(void*)(&xctrl.value), size);
+                else if (!padded_buf.empty())
+                {
+                    size_t response_offset = (control == RS_HWMONITOR) ? RS_HWMONITOR_LEGACY_HEADER_SIZE : 0;
+                    size_t available = padded_buf.size() > response_offset ? padded_buf.size() - response_offset : 0;
+                    memcpy(data, padded_buf.data() + response_offset, std::min<size_t>(size, available));
+
+                    if (control == RS_HWMONITOR)
+                    {
+                        // The d4xx driver writes a 2-byte "response length + 4" trailer at
+                        // Data[1000..1001] (relative to its own header-stripped view, i.e.
+                        // response_offset+1000 in our buffer). The generic hw-monitor caller
+                        // (command_transfer_over_xu::send_receive, HW_MONITOR_DATA_SIZE_OFFSET)
+                        // instead reads a 4-byte length at offset 1020 and adds 4 itself, so
+                        // relocate/re-encode the value to where it's actually expected.
+                        const size_t driver_trailer_offset = response_offset + 1000;
+                        const size_t host_trailer_offset = 1020;
+                        if (driver_trailer_offset + 1 < padded_buf.size() && host_trailer_offset + 4 <= size_t(size))
+                        {
+                            uint16_t raw_len = padded_buf[driver_trailer_offset] | (padded_buf[driver_trailer_offset + 1] << 8);
+                            uint32_t real_len = (raw_len >= 4) ? uint32_t(raw_len - 4) : 0;
+                            memcpy(data + host_trailer_offset, &real_len, sizeof(real_len));
+                        }
+                    }
+                }
 
                 return true;
             }
@@ -2812,7 +2884,7 @@ namespace librealsense
             {
                 switch(control)
                 {
-                    case RS_HWMONITOR: return RS_CAMERA_CID_HWMC;
+                    case RS_HWMONITOR: return RS_CAMERA_CID_HWMC_LEGACY;
                     case RS_DEPTH_EMITTER_ENABLED: return RS_CAMERA_CID_LASER_POWER;
                     case RS_EXPOSURE: return V4L2_CID_EXPOSURE_ABSOLUTE;//RS_CAMERA_CID_MANUAL_EXPOSURE; V4L2_CID_EXPOSURE_ABSOLUTE
                     case RS_LASER_POWER: return RS_CAMERA_CID_MANUAL_LASER_POWER;
